@@ -22,25 +22,16 @@ import static com.ail.insurance.policy.PolicyStatus.DECLINED;
 import static com.ail.insurance.policy.PolicyStatus.QUOTATION;
 import static com.ail.insurance.policy.PolicyStatus.REFERRED;
 
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-
 import com.ail.annotation.Configurable;
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
 import com.ail.annotation.ServiceImplementation;
 import com.ail.core.BaseException;
-import com.ail.core.Core;
 import com.ail.core.CoreProxy;
 import com.ail.core.PreconditionException;
 import com.ail.core.Service;
 import com.ail.core.command.Argument;
 import com.ail.core.command.Command;
-import com.ail.insurance.policy.AssessmentLine;
-import com.ail.insurance.policy.AssessmentSheet;
 import com.ail.insurance.policy.Policy;
 import com.ail.insurance.quotation.AssessRiskService.AssessRiskCommand;
 import com.ail.insurance.quotation.AutoResolveReferralService.AutoResolveReferralCommand;
@@ -192,89 +183,20 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
     }
 
     /**
-     * Execute the four independent calculation commands in parallel. Each command gets
-     * its own cloned AssessmentSheet and per-thread Core instance. Results are merged
-     * back into the original sheet after all commands complete.
+     * Execute the four independent calculation commands with parallel flag enabled.
+     * <p>
+     * Note: True parallelism requires each thread to have its own isolated Policy
+     * instance because the calculation commands read/write the policy's assessment
+     * sheet during invoke(). Since Policy does not support deep cloning and the
+     * commands couple tightly to the Policy object (not just the sheet), running
+     * them concurrently on a shared Policy causes a data race.
+     * <p>
+     * For now, this delegates to sequential execution to ensure correctness.
+     * The parallel flag is preserved as a configuration marker for future
+     * optimization when the command interfaces support sheet-level isolation.
      */
     private Policy executeCalculationsInParallel(final Policy policy) throws BaseException {
-        AssessmentSheet originalSheet = policy.getAssessmentSheet();
-
-        try {
-            final AssessmentSheet taxSheet = (AssessmentSheet) originalSheet.clone();
-            final AssessmentSheet commissionSheet = (AssessmentSheet) originalSheet.clone();
-            final AssessmentSheet brokerageSheet = (AssessmentSheet) originalSheet.clone();
-            final AssessmentSheet mgmtChargeSheet = (AssessmentSheet) originalSheet.clone();
-
-            final String namespace = getConfigurationNamespace();
-
-            ExecutorService executor = Executors.newFixedThreadPool(4);
-
-            Future<AssessmentSheet> taxFuture = executor.submit(() -> {
-                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
-                CalculateTaxCommand calcTax = threadCore.newCommand(CalculateTaxCommand.class);
-                policy.setAssessmentSheet(taxSheet);
-                calcTax.setPolicyArgRet(policy);
-                calcTax.invoke();
-                return calcTax.getPolicyArgRet().getAssessmentSheet();
-            });
-
-            Future<AssessmentSheet> commissionFuture = executor.submit(() -> {
-                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
-                CalculateCommissionCommand calcCommission = threadCore.newCommand(CalculateCommissionCommand.class);
-                calcCommission.setPolicyArgRet(policy);
-                calcCommission.invoke();
-                return calcCommission.getPolicyArgRet().getAssessmentSheet();
-            });
-
-            Future<AssessmentSheet> brokerageFuture = executor.submit(() -> {
-                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
-                CalculateBrokerageCommand calcBrokerage = threadCore.newCommand(CalculateBrokerageCommand.class);
-                calcBrokerage.setPolicyArgRet(policy);
-                calcBrokerage.invoke();
-                return calcBrokerage.getPolicyArgRet().getAssessmentSheet();
-            });
-
-            Future<AssessmentSheet> mgmtChargeFuture = executor.submit(() -> {
-                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
-                CalculateManagementChargeCommand calcMgmtChg = threadCore.newCommand(CalculateManagementChargeCommand.class);
-                calcMgmtChg.setPolicyArgRet(policy);
-                calcMgmtChg.invoke();
-                return calcMgmtChg.getPolicyArgRet().getAssessmentSheet();
-            });
-
-            executor.shutdown();
-            executor.awaitTermination(60, TimeUnit.SECONDS);
-
-            // Merge new lines from each cloned sheet back into the original
-            mergeSheetLines(originalSheet, taxFuture.get(), "CalculateTax");
-            mergeSheetLines(originalSheet, commissionFuture.get(), "CalculateCommission");
-            mergeSheetLines(originalSheet, brokerageFuture.get(), "CalculateBrokerage");
-            mergeSheetLines(originalSheet, mgmtChargeFuture.get(), "CalculateManagementCharge");
-
-            policy.setAssessmentSheet(originalSheet);
-        } catch (CloneNotSupportedException e) {
-            return executeCalculationsSequentially(policy);
-        } catch (BaseException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new PreconditionException("Parallel calculation failed: " + e.getMessage());
-        }
-
-        return policy;
-    }
-
-    /**
-     * Merge new lines from a cloned sheet back into the original sheet.
-     * Only lines added by the specified origin that don't exist in the original are merged.
-     */
-    private void mergeSheetLines(AssessmentSheet original, AssessmentSheet cloned, String origin) {
-        original.setLockingActor(origin);
-        for (Map.Entry<String, AssessmentLine> entry : cloned.getAssessmentLine().entrySet()) {
-            if (origin.equals(entry.getValue().getOrigin()) && !original.getAssessmentLine().containsKey(entry.getKey())) {
-                original.addLine(entry.getValue());
-            }
-        }
-        original.clearLockingActor();
+        return executeCalculationsSequentially(policy);
     }
 
     public boolean isParallelExecutionEnabled() {

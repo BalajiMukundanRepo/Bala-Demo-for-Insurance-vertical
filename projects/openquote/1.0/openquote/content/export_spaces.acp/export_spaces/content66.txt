@@ -28,7 +28,6 @@ public class PremiumCalculationService {
         }
         catch(Throwable e) {
             core.logError("Premium calculation failed for quote: " + quote.getProductTypeId(), e);
-            return;
         }
         finally {
             try {
