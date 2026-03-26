@@ -52,10 +52,11 @@ public class HibernateQueryService extends Service<QueryArgument> {
                 q.setParameter(argNo, args.getQueryArgumentsArg()[argNo]);
             }
             
-            args.setResultsListRet(q.list());
+            java.util.List results = q.list();
+            args.setResultsListRet(results);
             
-            if (q.list().size()==1) {
-                args.setUniqueResultRet((Type)q.list().get(0));
+            if (results.size()==1) {
+                args.setUniqueResultRet((Type)results.get(0));
             }
 		} 
         catch (HibernateException e) {

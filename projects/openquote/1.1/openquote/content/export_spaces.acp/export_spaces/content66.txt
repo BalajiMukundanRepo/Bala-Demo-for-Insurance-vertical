@@ -2,7 +2,6 @@ import com.ail.insurance.quotation.assessrisk.AssessRiskCommand;
 import com.ail.core.product.executepageaction.ExecutePageActionArgImp;
 import com.ail.insurance.quotation.calculatepremium.CalculatePremiumCommand;
 import com.ail.insurance.quotation.addquotenumber.AddQuoteNumberCommand;
-import com.ail.insurance.quotation.calculatepremium.CalculatePremiumCommand;
 import com.ail.insurance.quotation.enforcecompliance.EnforceComplianceCommand;
 import com.ail.core.CoreProxy;
 import com.ail.core.Functions;

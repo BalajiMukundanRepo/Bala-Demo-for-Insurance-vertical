@@ -17,10 +17,20 @@
 
 package com.ail.insurance.quotation;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
 import com.ail.annotation.ServiceImplementation;
 import com.ail.core.BaseException;
+import com.ail.core.Core;
 import com.ail.core.CoreProxy;
 import com.ail.core.Functions;
 import com.ail.core.PreconditionException;
@@ -179,59 +189,90 @@ public class AssessRiskService extends Service<AssessRiskService.AssessRiskArgum
 
     /**
      * Assess sections in parallel. Each section has its own independent AssessmentSheet,
-     * so there are no cross-section dependencies. However, each worker thread needs its
-     * own Core instance since Core is not thread-safe (it holds internal state for
-     * configuration lookups, caching, etc.).
-     * <p>
-     * Note: The current implementation delegates to sequential execution because
-     * {@code assessSection()} uses the shared {@code core} field (inherited from Service)
-     * which is not designed for concurrent access. True parallelism would require creating
-     * a separate Core instance per thread via {@code new CoreProxy(namespace, callersCore).getCore()}.
-     * This is left as a future optimization.
+     * so there are no cross-section dependencies. Each worker thread gets its own Core
+     * instance via {@code new CoreProxy(namespace, callersCore).getCore()} to avoid
+     * thread-safety issues with the shared core field.
      */
     private void assessSectionsInParallel(final Policy policy) throws BaseException {
-        // Core is not thread-safe (holds CoreUser reference, delegates to ConfigurationHandler,
-        // FactoryHandler, etc. which maintain internal state). Concurrent calls to
-        // core.newType() or core.newCommand() from multiple threads can corrupt that state.
-        // Fall back to sequential execution until per-thread Core instances are implemented.
-        assessSectionsSequentially(policy);
+        final String namespace = Functions.productNameToConfigurationNamespace(policy.getProductTypeId());
+
+        List<Future<BaseException>> futures = new ArrayList<Future<BaseException>>();
+        ExecutorService executor = Executors.newFixedThreadPool(
+            Math.min(policy.getSection().size(), Runtime.getRuntime().availableProcessors()));
+
+        for (final Section section : policy.getSection()) {
+            futures.add(executor.submit(new Callable<BaseException>() {
+                @Override
+                public BaseException call() {
+                    try {
+                        Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
+                        assessSectionWithCore(policy, section, threadCore);
+                        return null;
+                    } catch (BaseException e) {
+                        return e;
+                    }
+                }
+            }));
+        }
+
+        executor.shutdown();
+        try {
+            executor.awaitTermination(60, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PreconditionException("Parallel section assessment interrupted");
+        }
+
+        for (Future<BaseException> f : futures) {
+            try {
+                BaseException ex = f.get();
+                if (ex != null) throw ex;
+            } catch (ExecutionException e) {
+                throw new PreconditionException("Parallel section assessment failed: " + e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new PreconditionException("Parallel section assessment interrupted: " + e.getMessage());
+            }
+        }
     }
 
     /**
-     * Assess risk for a single section.
+     * Assess risk for a single section using the shared core instance.
      */
     private void assessSection(Policy policy, Section section) throws BaseException {
-        // Make sure the section has a SectionType - we'll need it to build rule names
+        assessSectionWithCore(policy, section, getCore());
+    }
+
+    /**
+     * Assess risk for a single section using a specific Core instance.
+     * This allows parallel execution by providing per-thread Core instances.
+     */
+    private void assessSectionWithCore(Policy policy, Section section, Core threadCore) throws BaseException {
         if (section.getSectionTypeId() == null || section.getSectionTypeId().length() == 0) {
             throw new PreconditionException("policy.section[id=" + section.getId() + "].sectionTypeId==null || policy.section[id=" + section.getId() + "].sectionTypeId==\"\"");
         }
 
         AssessmentSheet as;
 
-        // Get the assessment sheet.
         if (section.getAssessmentSheet() == null) {
-            as = core.newType(AssessmentSheet.class);
+            as = threadCore.newType(AssessmentSheet.class);
         } else {
             as = section.getAssessmentSheet();
             as.removeLinesByOrigin("AssessRisk");
         }
 
-        // Make up the rule name <ProductType>.<SectionType>
         String ruleName = "AssessSectionRisk/" + section.getSectionTypeId();
 
-        // Load the rule, and populate it with arguments
-        AssessSectionRiskCommand rule = getCore().newCommand(ruleName, AssessSectionRiskCommand.class);
-        rule.setCoreArg(getCore());
+        AssessSectionRiskCommand rule = threadCore.newCommand(ruleName, AssessSectionRiskCommand.class);
+        rule.setCoreArg(threadCore);
         rule.setPolicyArg(policy);
         rule.setSectionArg(section);
         rule.setAssessmentSheetArgRet(as);
 
-        // Lock the sheet to us, run the rules, and unlock the sheet.
         rule.getAssessmentSheetArgRet().setLockingActor("AssessRisk");
         rule.invoke();
         rule.getAssessmentSheetArgRet().clearLockingActor();
 
-        // Pull the AssessmentSheet out of rules and add it to the section.
         section.setAssessmentSheet(rule.getAssessmentSheetArgRet());
     }
 

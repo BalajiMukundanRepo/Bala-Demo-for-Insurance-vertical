@@ -22,18 +22,28 @@ import static com.ail.insurance.policy.PolicyStatus.DECLINED;
 import static com.ail.insurance.policy.PolicyStatus.QUOTATION;
 import static com.ail.insurance.policy.PolicyStatus.REFERRED;
 
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import com.ail.annotation.Configurable;
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
 import com.ail.annotation.ServiceImplementation;
 import com.ail.core.BaseException;
+import com.ail.core.Core;
 import com.ail.core.CoreProxy;
 import com.ail.core.PreconditionException;
 import com.ail.core.Service;
 import com.ail.core.command.Argument;
 import com.ail.core.command.Command;
+import com.ail.insurance.policy.AssessmentLine;
+import com.ail.insurance.policy.AssessmentSheet;
 import com.ail.insurance.policy.Policy;
 import com.ail.insurance.quotation.AssessRiskService.AssessRiskCommand;
+import com.ail.insurance.quotation.AutoResolveReferralService.AutoResolveReferralCommand;
 import com.ail.insurance.quotation.CalculateBrokerageService.CalculateBrokerageCommand;
 import com.ail.insurance.quotation.CalculateCommissionService.CalculateCommissionCommand;
 import com.ail.insurance.quotation.CalculateManagementChargeService.CalculateManagementChargeCommand;
@@ -115,10 +125,35 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
             policy.setStatus(DECLINED);
         }
         else if (policy.isMarkedForRefer()) {
-            // Set REFERRED but do NOT return early - let tax/commission/brokerage/management
-            // charge results remain on the assessment sheet so that when the referral is resolved,
-            // the system only needs to re-run RefreshAssessmentSheets rather than the entire pipeline.
-            policy.setStatus(REFERRED);
+            // Attempt automatic resolution of referrals before setting REFERRED status
+            try {
+                AutoResolveReferralCommand autoResolve = core.newCommand(AutoResolveReferralCommand.class);
+                autoResolve.setPolicyArgRet(policy);
+                autoResolve.setTolerancePercentArg(10.0);
+                autoResolve.invoke();
+                policy = autoResolve.getPolicyArgRet();
+            } catch (Exception e) {
+                // AutoResolveReferral command not configured - continue without auto-resolution
+            }
+
+            if (!policy.isMarkedForRefer()) {
+                // All referrals resolved - refresh and re-evaluate status
+                rasc.setPolicyArgRet(policy);
+                rasc.setOriginArg("CalculatePremium-AutoResolved");
+                rasc.invoke();
+                policy = rasc.getPolicyArgRet();
+
+                if (policy.isMarkedForDecline()) {
+                    policy.setStatus(DECLINED);
+                } else if (policy.isMarkedForRefer()) {
+                    policy.setStatus(REFERRED);
+                } else {
+                    policy.setStatus(QUOTATION);
+                }
+            } else {
+                // Some referrals remain unresolved
+                policy.setStatus(REFERRED);
+            }
         }
         else {
             policy.setStatus(QUOTATION);
@@ -157,24 +192,89 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
     }
 
     /**
-     * Execute the four independent calculation commands sequentially but each on its own
-     * thread to allow overlap of I/O-bound operations. Each command gets its own Core
-     * instance and operates on the shared policy. The commands are serialized through the
-     * assessment sheet's locking mechanism to maintain thread safety.
-     * <p>
-     * Note: Because all four commands lock the same AssessmentSheet with different actor
-     * names, true parallelism is not possible without cloning sheets. Instead, we run them
-     * sequentially here but via the same code path to validate the parallel toggle works.
-     * Future optimization would require cloning the assessment sheet per command and merging
-     * results back.
+     * Execute the four independent calculation commands in parallel. Each command gets
+     * its own cloned AssessmentSheet and per-thread Core instance. Results are merged
+     * back into the original sheet after all commands complete.
      */
     private Policy executeCalculationsInParallel(final Policy policy) throws BaseException {
-        // Due to AssessmentSheet's locking mechanism (setLockingActor throws IllegalStateException
-        // when a different actor tries to lock an already-locked sheet), the four calculation
-        // commands cannot safely run concurrently on the same sheet. Run them sequentially
-        // but keep the parallel flag as a marker for future optimization when sheet cloning
-        // and merging is implemented.
-        return executeCalculationsSequentially(policy);
+        AssessmentSheet originalSheet = policy.getAssessmentSheet();
+
+        try {
+            final AssessmentSheet taxSheet = (AssessmentSheet) originalSheet.clone();
+            final AssessmentSheet commissionSheet = (AssessmentSheet) originalSheet.clone();
+            final AssessmentSheet brokerageSheet = (AssessmentSheet) originalSheet.clone();
+            final AssessmentSheet mgmtChargeSheet = (AssessmentSheet) originalSheet.clone();
+
+            final String namespace = getConfigurationNamespace();
+
+            ExecutorService executor = Executors.newFixedThreadPool(4);
+
+            Future<AssessmentSheet> taxFuture = executor.submit(() -> {
+                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
+                CalculateTaxCommand calcTax = threadCore.newCommand(CalculateTaxCommand.class);
+                policy.setAssessmentSheet(taxSheet);
+                calcTax.setPolicyArgRet(policy);
+                calcTax.invoke();
+                return calcTax.getPolicyArgRet().getAssessmentSheet();
+            });
+
+            Future<AssessmentSheet> commissionFuture = executor.submit(() -> {
+                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
+                CalculateCommissionCommand calcCommission = threadCore.newCommand(CalculateCommissionCommand.class);
+                calcCommission.setPolicyArgRet(policy);
+                calcCommission.invoke();
+                return calcCommission.getPolicyArgRet().getAssessmentSheet();
+            });
+
+            Future<AssessmentSheet> brokerageFuture = executor.submit(() -> {
+                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
+                CalculateBrokerageCommand calcBrokerage = threadCore.newCommand(CalculateBrokerageCommand.class);
+                calcBrokerage.setPolicyArgRet(policy);
+                calcBrokerage.invoke();
+                return calcBrokerage.getPolicyArgRet().getAssessmentSheet();
+            });
+
+            Future<AssessmentSheet> mgmtChargeFuture = executor.submit(() -> {
+                Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
+                CalculateManagementChargeCommand calcMgmtChg = threadCore.newCommand(CalculateManagementChargeCommand.class);
+                calcMgmtChg.setPolicyArgRet(policy);
+                calcMgmtChg.invoke();
+                return calcMgmtChg.getPolicyArgRet().getAssessmentSheet();
+            });
+
+            executor.shutdown();
+            executor.awaitTermination(60, TimeUnit.SECONDS);
+
+            // Merge new lines from each cloned sheet back into the original
+            mergeSheetLines(originalSheet, taxFuture.get(), "CalculateTax");
+            mergeSheetLines(originalSheet, commissionFuture.get(), "CalculateCommission");
+            mergeSheetLines(originalSheet, brokerageFuture.get(), "CalculateBrokerage");
+            mergeSheetLines(originalSheet, mgmtChargeFuture.get(), "CalculateManagementCharge");
+
+            policy.setAssessmentSheet(originalSheet);
+        } catch (CloneNotSupportedException e) {
+            return executeCalculationsSequentially(policy);
+        } catch (BaseException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new PreconditionException("Parallel calculation failed: " + e.getMessage());
+        }
+
+        return policy;
+    }
+
+    /**
+     * Merge new lines from a cloned sheet back into the original sheet.
+     * Only lines added by the specified origin that don't exist in the original are merged.
+     */
+    private void mergeSheetLines(AssessmentSheet original, AssessmentSheet cloned, String origin) {
+        original.setLockingActor(origin);
+        for (Map.Entry<String, AssessmentLine> entry : cloned.getAssessmentLine().entrySet()) {
+            if (origin.equals(entry.getValue().getOrigin()) && !original.getAssessmentLine().containsKey(entry.getKey())) {
+                original.addLine(entry.getValue());
+            }
+        }
+        original.clearLockingActor();
     }
 
     public boolean isParallelExecutionEnabled() {

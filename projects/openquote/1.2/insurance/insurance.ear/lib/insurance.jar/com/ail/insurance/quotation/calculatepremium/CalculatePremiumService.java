@@ -159,7 +159,6 @@ public class CalculatePremiumService extends Service {
         }
         else if (policy.isMarkedForRefer()) {
             policy.setStatus(REFERRED);
-            return;
         }
         else {
             policy.setStatus(QUOTATION);

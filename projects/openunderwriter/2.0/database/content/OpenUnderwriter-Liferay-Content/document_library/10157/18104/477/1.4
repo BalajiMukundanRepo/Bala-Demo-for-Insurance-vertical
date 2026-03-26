@@ -12,6 +12,7 @@
     
     <questionPage id="Proposer" title="Proposer's Details">
         <action when="onRenderResponse" commandName="QuoteSetup"/>
+        <action when="onRenderResponse" commandName="DataPrefill"/>
         <navigationSection id="Navigation">
             <commandButtonAction id="Next" destinationPageId="CompanyDetails"/>
         </navigationSection>
@@ -138,6 +139,13 @@
                 </answerScroller>
             </answerSection>
         </referralSummary>
+        <navigationSection>
+            <commandButtonAction label="Resolve and Recalculate" destinationPageId="Quotation">
+                <action when="onProcessActions" commandName="ResolveAndRecalculate"/>
+                <pageForwardAction when="onProcessActions" condition="i:test(status[.='QUOTATION'])" destinationPageId="Quotation"/>
+                <pageForwardAction when="onProcessActions" condition="i:test(status[.='REFERRED'])" destinationPageId="Referral"/>
+            </commandButtonAction>
+        </navigationSection>
     </questionPage>
 
     <questionPage id="PremiumRequest" title="Premium override request">
