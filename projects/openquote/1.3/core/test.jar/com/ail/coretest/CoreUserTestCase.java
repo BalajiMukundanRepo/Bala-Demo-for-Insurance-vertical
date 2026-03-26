@@ -189,6 +189,7 @@ public class CoreUserTestCase extends TestCase implements CoreUser, Configuratio
 /**
  * Authenticator to use during test runs.
  */
+// NOTE: These are test-only credentials, not for production use
 class TestAuthenticator extends Authenticator {
     protected PasswordAuthentication getPasswordAuthentication() {
         return new PasswordAuthentication("admin", "admin".toCharArray());

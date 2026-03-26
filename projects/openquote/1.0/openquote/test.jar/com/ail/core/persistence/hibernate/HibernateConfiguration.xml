@@ -9,11 +9,16 @@
         
         <property name="connection.driver_class">org.gjt.mm.mysql.Driver</property> 
         <property name="connection.url">jdbc:mysql://localhost:3306/@dbname@</property> 
-        <property name="connection.username">openquote</property> 
-        <property name="connection.password">openquote</property> 
+        <!-- Credentials should come from environment variables or a secrets manager -->
+        <property name="connection.username">@db.username@</property> 
+        <property name="connection.password">@db.password@</property> 
 
-        <!-- JDBC connection pool (use the built-in) --> 
-        <property name="connection.pool_size">1</property> 
+        <!-- C3P0 connection pool settings -->
+        <property name="hibernate.c3p0.min_size">5</property>
+        <property name="hibernate.c3p0.max_size">20</property>
+        <property name="hibernate.c3p0.timeout">300</property>
+        <property name="hibernate.c3p0.max_statements">50</property>
+        <property name="hibernate.c3p0.idle_test_period">250</property>
         
         <!-- SQL dialect --> 
         <property name="dialect">org.hibernate.dialect.MySQLDialect</property> 
@@ -21,8 +26,10 @@
         <!-- Enable Hibernate's automatic session context management --> 
         <property name="current_session_context_class">thread</property> 
         
-        <!-- Disable the second-level cache --> 
-        <property name="cache.provider_class">org.hibernate.cache.NoCacheProvider</property> 
+        <property name="cache.use_second_level_cache">true</property>
+        <property name="cache.use_query_cache">true</property>
+        <property name="cache.provider_class">org.hibernate.cache.EhCacheProvider</property>
+        <property name="cache.provider_configuration_file_resource_path">com/ail/core/persistence/hibernate/ehcache.xml</property>
         
         <!-- Echo all executed SQL to stdout --> 
         <property name="show_sql">false</property> 

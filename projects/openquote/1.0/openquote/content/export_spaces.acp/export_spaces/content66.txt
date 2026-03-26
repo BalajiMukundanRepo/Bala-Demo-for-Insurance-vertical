@@ -2,7 +2,6 @@ import com.ail.insurance.quotation.assessrisk.AssessRiskCommand;
 import com.ail.core.product.executepageaction.ExecutePageActionArgImp;
 import com.ail.insurance.quotation.calculatepremium.CalculatePremiumCommand;
 import com.ail.insurance.quotation.addquotenumber.AddQuoteNumberCommand;
-import com.ail.insurance.quotation.calculatepremium.CalculatePremiumCommand;
 import com.ail.insurance.quotation.enforcecompliance.EnforceComplianceCommand;
 import com.ail.core.CoreProxy;
 import com.ail.openquote.Quotation;
@@ -28,7 +27,10 @@ public class PremiumCalculationService {
             quote=(Quotation)cpc.getPolicyArgRet();
         }
         catch(Throwable e) {
-            e.printStackTrace();
+            java.util.logging.Logger.getLogger("PremiumCalculationService")
+                .log(java.util.logging.Level.SEVERE, "Premium calculation failed", e);
+            args.setQuotationArgRet(quote);
+            return;
         }
         finally {
             try {
