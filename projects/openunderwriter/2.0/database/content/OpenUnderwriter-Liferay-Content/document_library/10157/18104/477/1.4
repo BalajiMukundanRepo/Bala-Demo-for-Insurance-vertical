@@ -140,7 +140,7 @@
             </answerSection>
         </referralSummary>
         <navigationSection>
-            <commandButtonAction label="Resolve and Recalculate" destinationPageId="Quotation">
+            <commandButtonAction label="Resolve and Recalculate" destinationPageId="Referral">
                 <action when="onProcessActions" commandName="ResolveAndRecalculate"/>
                 <pageForwardAction when="onProcessActions" condition="i:test(status[.='QUOTATION'])" destinationPageId="Quotation"/>
                 <pageForwardAction when="onProcessActions" condition="i:test(status[.='REFERRED'])" destinationPageId="Referral"/>
