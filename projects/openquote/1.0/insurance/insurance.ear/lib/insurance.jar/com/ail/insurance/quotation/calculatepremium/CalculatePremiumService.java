@@ -117,16 +117,6 @@ public class CalculatePremiumService extends Service {
             throw new PreconditionException("policy.assessmentSheet==null");
         }
 
-        if (policy.isMarkedForDecline()) {
-            policy.setStatus(DECLINED);
-            return;
-        }
-
-        if (policy.isMarkedForRefer()) {
-            policy.setStatus(REFERRED);
-            return;
-        }
-
         // calculate the assessment sheet so that the other calc services get to see premiums etc.
         RefreshAssessmentSheetsCommand rasc=(RefreshAssessmentSheetsCommand)core.newCommand("RefreshAssessmentSheets");
         rasc.setPolicyArgRet(policy);
@@ -164,7 +154,15 @@ public class CalculatePremiumService extends Service {
         rasc.invoke();
         policy=rasc.getPolicyArgRet();
 
-        policy.setStatus(QUOTATION);
+        if (policy.isMarkedForDecline()) {
+            policy.setStatus(DECLINED);
+        }
+        else if (policy.isMarkedForRefer()) {
+            policy.setStatus(REFERRED);
+        }
+        else {
+            policy.setStatus(QUOTATION);
+        }
     }
 }
 
