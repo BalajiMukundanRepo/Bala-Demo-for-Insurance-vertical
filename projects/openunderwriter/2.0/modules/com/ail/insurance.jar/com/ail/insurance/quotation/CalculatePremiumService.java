@@ -126,8 +126,8 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
             } catch (Exception e) {
                 // Auto-resolve failed at runtime - continue with normal referral flow
                 core.logInfo("AutoResolveReferral failed, continuing with referral: " + e.getMessage());
-            } catch (Error e) {
-                // AutoResolveReferral command not configured (ConfigurationError extends Error)
+            } catch (com.ail.core.BaseError e) {
+                // AutoResolveReferral command not configured (ConfigurationError extends BaseError extends Error)
                 core.logInfo("AutoResolveReferral not configured, skipping: " + e.getMessage());
             }
 
