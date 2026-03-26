@@ -17,15 +17,6 @@
 
 package com.ail.insurance.quotation;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
 import com.ail.annotation.ServiceImplementation;
@@ -188,52 +179,23 @@ public class AssessRiskService extends Service<AssessRiskService.AssessRiskArgum
     }
 
     /**
-     * Assess sections in parallel. Each section has its own independent AssessmentSheet,
-     * so there are no cross-section dependencies. Each worker thread gets its own Core
-     * instance via {@code new CoreProxy(namespace, callersCore).getCore()} to avoid
-     * thread-safety issues with the shared core field.
+     * Assess sections in parallel when the parallel flag is enabled.
+     * <p>
+     * Note: True parallelism requires thread-safe access to the shared Policy
+     * object. While each section has its own AssessmentSheet, the Policy container
+     * is shared mutably across threads — {@code section.setAssessmentSheet()} at
+     * line 276 modifies a child of the shared Policy, and rule commands receive
+     * the shared Policy via {@code rule.setPolicyArg(policy)}. If any section rule
+     * reads mutable policy-level state while another thread writes, this is a data
+     * race.
+     * <p>
+     * For now, this delegates to sequential execution to ensure correctness.
+     * The parallel flag is preserved as a configuration marker for future
+     * optimization when the Policy object supports concurrent section mutation
+     * (e.g., via synchronized section access or deep-copy per thread).
      */
     private void assessSectionsInParallel(final Policy policy) throws BaseException {
-        final String namespace = Functions.productNameToConfigurationNamespace(policy.getProductTypeId());
-
-        List<Future<BaseException>> futures = new ArrayList<Future<BaseException>>();
-        ExecutorService executor = Executors.newFixedThreadPool(
-            Math.min(policy.getSection().size(), Runtime.getRuntime().availableProcessors()));
-
-        for (final Section section : policy.getSection()) {
-            futures.add(executor.submit(new Callable<BaseException>() {
-                @Override
-                public BaseException call() {
-                    try {
-                        Core threadCore = new CoreProxy(namespace, args.getCallersCore()).getCore();
-                        assessSectionWithCore(policy, section, threadCore);
-                        return null;
-                    } catch (BaseException e) {
-                        return e;
-                    }
-                }
-            }));
-        }
-
-        executor.shutdown();
-        try {
-            executor.awaitTermination(60, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new PreconditionException("Parallel section assessment interrupted");
-        }
-
-        for (Future<BaseException> f : futures) {
-            try {
-                BaseException ex = f.get();
-                if (ex != null) throw ex;
-            } catch (ExecutionException e) {
-                throw new PreconditionException("Parallel section assessment failed: " + e.getMessage());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new PreconditionException("Parallel section assessment interrupted: " + e.getMessage());
-            }
-        }
+        assessSectionsSequentially(policy);
     }
 
     /**

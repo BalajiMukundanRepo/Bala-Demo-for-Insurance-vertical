@@ -10,8 +10,8 @@
         <!-- Database connection settings --> 
         <property name="connection.driver_class">org.gjt.mm.mysql.Driver</property> 
         <property name="connection.url">jdbc:mysql://localhost:3306/@dbname@</property> 
-        <property name="connection.username">@db.username@</property> 
-        <property name="connection.password">@db.password@</property> 
+        <property name="connection.username">@dbusername@</property> 
+        <property name="connection.password">@dbpassword@</property> 
         
         <!-- C3P0 connection pool settings -->
         <property name="hibernate.c3p0.min_size">5</property>
