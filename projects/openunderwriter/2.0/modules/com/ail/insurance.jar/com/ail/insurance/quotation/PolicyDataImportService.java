@@ -98,8 +98,7 @@ public class PolicyDataImportService extends Service<PolicyDataImportService.Pol
         core = new CoreProxy(getConfigurationNamespace(), args.getCallersCore()).getCore();
 
         try {
-            CoreProxy coreProxy = new CoreProxy();
-            Policy policy = coreProxy.fromXML(Policy.class, args.getPolicyDataArg());
+            Policy policy = core.fromXML(Policy.class, args.getPolicyDataArg());
 
             if (policy.getProductTypeId() == null || policy.getProductTypeId().length() == 0) {
                 policy.setProductTypeId(args.getProductTypeIdArg());

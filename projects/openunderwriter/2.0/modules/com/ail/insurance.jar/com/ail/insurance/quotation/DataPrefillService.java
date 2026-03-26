@@ -87,20 +87,25 @@ public class DataPrefillService extends Service<DataPrefillService.DataPrefillAr
 
         String dataSource = args.getDataSourceArg();
 
+        // Attempt to invoke a product-specific prefill command if configured.
+        // The command name follows the convention: DataPrefill/<dataSource>
+        String commandName = "DataPrefill/" + dataSource;
+        DataPrefillCommand prefillCmd;
         try {
-            // Attempt to invoke a product-specific prefill command if configured.
-            // The command name follows the convention: DataPrefill/<dataSource>
-            String commandName = "DataPrefill/" + dataSource;
-            DataPrefillCommand prefillCmd = core.newCommand(commandName, DataPrefillCommand.class);
-            prefillCmd.setPolicyArgRet(policy);
-            prefillCmd.setDataSourceArg(dataSource);
-            prefillCmd.invoke();
-            policy = prefillCmd.getPolicyArgRet();
+            prefillCmd = core.newCommand(commandName, DataPrefillCommand.class);
         } catch (Exception e) {
-            // If no product-specific prefill command is configured, log and continue.
+            // No product-specific prefill command is configured — log and continue.
             // The policy will proceed without pre-filled data.
             core.logInfo("No DataPrefill command configured for source '" + dataSource + "': " + e.getMessage());
+            args.setPolicyArgRet(policy);
+            return;
         }
+
+        // Command exists — invoke it. Let execution failures propagate to the caller.
+        prefillCmd.setPolicyArgRet(policy);
+        prefillCmd.setDataSourceArg(dataSource);
+        prefillCmd.invoke();
+        policy = prefillCmd.getPolicyArgRet();
 
         args.setPolicyArgRet(policy);
     }
