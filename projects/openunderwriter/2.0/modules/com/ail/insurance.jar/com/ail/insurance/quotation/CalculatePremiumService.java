@@ -22,13 +22,6 @@ import static com.ail.insurance.policy.PolicyStatus.DECLINED;
 import static com.ail.insurance.policy.PolicyStatus.QUOTATION;
 import static com.ail.insurance.policy.PolicyStatus.REFERRED;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-
 import com.ail.annotation.Configurable;
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
