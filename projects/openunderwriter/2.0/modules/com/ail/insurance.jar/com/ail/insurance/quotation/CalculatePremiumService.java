@@ -34,6 +34,7 @@ import com.ail.core.command.Argument;
 import com.ail.core.command.Command;
 import com.ail.insurance.policy.Policy;
 import com.ail.insurance.quotation.AssessRiskService.AssessRiskCommand;
+import com.ail.insurance.quotation.AutoResolveReferralService.AutoResolveReferralCommand;
 import com.ail.insurance.quotation.CalculateBrokerageService.CalculateBrokerageCommand;
 import com.ail.insurance.quotation.CalculateCommissionService.CalculateCommissionCommand;
 import com.ail.insurance.quotation.CalculateManagementChargeService.CalculateManagementChargeCommand;
@@ -115,10 +116,39 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
             policy.setStatus(DECLINED);
         }
         else if (policy.isMarkedForRefer()) {
-            // Set REFERRED but do NOT return early - let tax/commission/brokerage/management
-            // charge results remain on the assessment sheet so that when the referral is resolved,
-            // the system only needs to re-run RefreshAssessmentSheets rather than the entire pipeline.
-            policy.setStatus(REFERRED);
+            // Attempt automatic resolution of referrals before setting REFERRED status
+            try {
+                AutoResolveReferralCommand autoResolve = core.newCommand(AutoResolveReferralCommand.class);
+                autoResolve.setPolicyArgRet(policy);
+                autoResolve.setTolerancePercentArg(10.0);
+                autoResolve.invoke();
+                policy = autoResolve.getPolicyArgRet();
+            } catch (Exception e) {
+                // Auto-resolve failed at runtime - continue with normal referral flow
+                core.logInfo("AutoResolveReferral failed, continuing with referral: " + e.getMessage());
+            } catch (com.ail.core.BaseError e) {
+                // AutoResolveReferral command not configured (ConfigurationError extends BaseError extends Error)
+                core.logInfo("AutoResolveReferral not configured, skipping: " + e.getMessage());
+            }
+
+            if (!policy.isMarkedForRefer()) {
+                // All referrals resolved - refresh and re-evaluate status
+                rasc.setPolicyArgRet(policy);
+                rasc.setOriginArg("CalculatePremium-AutoResolved");
+                rasc.invoke();
+                policy = rasc.getPolicyArgRet();
+
+                if (policy.isMarkedForDecline()) {
+                    policy.setStatus(DECLINED);
+                } else if (policy.isMarkedForRefer()) {
+                    policy.setStatus(REFERRED);
+                } else {
+                    policy.setStatus(QUOTATION);
+                }
+            } else {
+                // Some referrals remain unresolved
+                policy.setStatus(REFERRED);
+            }
         }
         else {
             policy.setStatus(QUOTATION);
@@ -157,23 +187,19 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
     }
 
     /**
-     * Execute the four independent calculation commands sequentially but each on its own
-     * thread to allow overlap of I/O-bound operations. Each command gets its own Core
-     * instance and operates on the shared policy. The commands are serialized through the
-     * assessment sheet's locking mechanism to maintain thread safety.
+     * Execute the four independent calculation commands with parallel flag enabled.
      * <p>
-     * Note: Because all four commands lock the same AssessmentSheet with different actor
-     * names, true parallelism is not possible without cloning sheets. Instead, we run them
-     * sequentially here but via the same code path to validate the parallel toggle works.
-     * Future optimization would require cloning the assessment sheet per command and merging
-     * results back.
+     * Note: True parallelism requires each thread to have its own isolated Policy
+     * instance because the calculation commands read/write the policy's assessment
+     * sheet during invoke(). Since Policy does not support deep cloning and the
+     * commands couple tightly to the Policy object (not just the sheet), running
+     * them concurrently on a shared Policy causes a data race.
+     * <p>
+     * For now, this delegates to sequential execution to ensure correctness.
+     * The parallel flag is preserved as a configuration marker for future
+     * optimization when the command interfaces support sheet-level isolation.
      */
     private Policy executeCalculationsInParallel(final Policy policy) throws BaseException {
-        // Due to AssessmentSheet's locking mechanism (setLockingActor throws IllegalStateException
-        // when a different actor tries to lock an already-locked sheet), the four calculation
-        // commands cannot safely run concurrently on the same sheet. Run them sequentially
-        // but keep the parallel flag as a marker for future optimization when sheet cloning
-        // and merging is implemented.
         return executeCalculationsSequentially(policy);
     }
 

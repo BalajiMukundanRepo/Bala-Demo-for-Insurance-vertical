@@ -26,6 +26,7 @@ import com.ail.insurance.quotation.AssessRiskService.AssessRiskCommand;
 import com.ail.insurance.quotation.CalculateBrokerageService.CalculateBrokerageCommand;
 import com.ail.insurance.quotation.CalculateCommissionService.CalculateCommissionCommand;
 import com.ail.insurance.quotation.CalculateManagementChargeService.CalculateManagementChargeCommand;
+import com.ail.insurance.quotation.AutoResolveReferralService.AutoResolveReferralCommand;
 import com.ail.insurance.quotation.CalculatePremiumService.CalculatePremiumArgument;
 import com.ail.insurance.quotation.CalculateTaxService.CalculateTaxCommand;
 import com.ail.insurance.quotation.RefreshAssessmentSheetsService.RefreshAssessmentSheetsCommand;
@@ -43,6 +44,7 @@ public class CalculatePremiumServiceTest {
     private CalculateBrokerageCommand mockCalcBrokerageCommand;
     private CalculateManagementChargeCommand mockCalcMgmtChargeCommand;
     private AssessmentSheet mockAssessmentSheet;
+    private AutoResolveReferralCommand mockAutoResolveCommand;
 
     @Before
     public void setup() throws BaseException {
@@ -56,6 +58,7 @@ public class CalculatePremiumServiceTest {
         mockCalcBrokerageCommand = mock(CalculateBrokerageCommand.class);
         mockCalcMgmtChargeCommand = mock(CalculateManagementChargeCommand.class);
         mockAssessmentSheet = mock(AssessmentSheet.class);
+        mockAutoResolveCommand = mock(AutoResolveReferralCommand.class);
 
         sut = spy(new CalculatePremiumService());
         sut.setCore(mockCore);
@@ -87,6 +90,9 @@ public class CalculatePremiumServiceTest {
 
         when(mockCore.newCommand(CalculateManagementChargeCommand.class)).thenReturn(mockCalcMgmtChargeCommand);
         when(mockCalcMgmtChargeCommand.getPolicyArgRet()).thenReturn(mockPolicy);
+
+        when(mockCore.newCommand(AutoResolveReferralCommand.class)).thenReturn(mockAutoResolveCommand);
+        when(mockAutoResolveCommand.getPolicyArgRet()).thenReturn(mockPolicy);
     }
 
     @Test(expected = PreconditionException.class)
@@ -168,6 +174,11 @@ public class CalculatePremiumServiceTest {
         sut.setParallelExecutionEnabled(true);
         sut.invoke();
         verify(mockPolicy).setStatus(eq(QUOTATION));
+        // Verify all four calculations ran
+        verify(mockCalcTaxCommand).invoke();
+        verify(mockCalcCommissionCommand).invoke();
+        verify(mockCalcBrokerageCommand).invoke();
+        verify(mockCalcMgmtChargeCommand).invoke();
     }
 
     @Test
@@ -175,6 +186,41 @@ public class CalculatePremiumServiceTest {
         sut.setParallelExecutionEnabled(true);
         when(mockPolicy.isMarkedForRefer()).thenReturn(true);
         sut.invoke();
+        verify(mockPolicy).setStatus(eq(REFERRED));
+        // Verify all four calculations still ran even with referral
+        verify(mockCalcTaxCommand).invoke();
+        verify(mockCalcCommissionCommand).invoke();
+        verify(mockCalcBrokerageCommand).invoke();
+        verify(mockCalcMgmtChargeCommand).invoke();
+    }
+
+    @Test
+    public void testAutoResolveReferralInPipeline() throws BaseException {
+        // Policy is marked for refer initially, then not after auto-resolve
+        when(mockPolicy.isMarkedForRefer()).thenReturn(true).thenReturn(false);
+
+        sut.invoke();
+
+        // Auto-resolve was invoked
+        verify(mockAutoResolveCommand).setPolicyArgRet(mockPolicy);
+        verify(mockAutoResolveCommand).setTolerancePercentArg(10.0);
+        verify(mockAutoResolveCommand).invoke();
+
+        // After auto-resolve cleared all referrals, status should be QUOTATION
+        verify(mockPolicy).setStatus(eq(QUOTATION));
+    }
+
+    @Test
+    public void testAutoResolveReferralPartialResolution() throws BaseException {
+        // Policy remains marked for refer even after auto-resolve
+        when(mockPolicy.isMarkedForRefer()).thenReturn(true);
+
+        sut.invoke();
+
+        // Auto-resolve was invoked but some referrals remain
+        verify(mockAutoResolveCommand).invoke();
+
+        // Status should still be REFERRED since not all referrals were resolved
         verify(mockPolicy).setStatus(eq(REFERRED));
     }
 }

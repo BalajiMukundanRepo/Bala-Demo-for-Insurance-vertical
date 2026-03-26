@@ -1,18 +1,3 @@
-  create table if not exists ##dbname##.core_Type(
-      systemId int auto_increment primary key,
-      versionId int
-  ) ENGINE=InnoDB;
-  
-  create table if not exists ##dbname##.core_Attribute (
-      systemId int primary key,
-      parentSystemId int,
-      id varchar(255),
-      value varchar(255),
-      format varchar(255),
-      unit varchar(255),
-      rank int
-  ) ENGINE=InnoDB;
-  
   create table if not exists ##dbname##.core_configure_Component (
       systemId int primary key,
       name varchar(255)
@@ -219,3 +204,12 @@
       wording_document longblob,
       certificate_document longblob
   ) ENGINE=InnoDB;
+
+  CREATE INDEX idx_policy_status ON ##dbname##.insurance_Policy (status);
+  CREATE INDEX idx_policy_productTypeId ON ##dbname##.insurance_Policy (productTypeId);
+  CREATE INDEX idx_policy_policyNumber ON ##dbname##.insurance_Policy (policyNumber);
+  CREATE INDEX idx_policy_quotationNumber ON ##dbname##.insurance_Policy (quotationNumber);
+  CREATE INDEX idx_section_parentSystemId ON ##dbname##.insurance_Section (parentSystemId);
+  CREATE INDEX idx_asset_parentSystemId ON ##dbname##.insurance_Asset (parentSystemId);
+  CREATE INDEX idx_assessmentline_parentSystemId ON ##dbname##.insurance_AssessmentLine (parentSystemId);
+  CREATE INDEX idx_attribute_parentSystemId ON ##dbname##.core_Attribute (parentSystemId);

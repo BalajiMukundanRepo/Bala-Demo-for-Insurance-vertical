@@ -674,6 +674,30 @@
         </command>
         
         <!-- ================================================================== -->
+        <!-- Data prefill and import commands                                   -->
+        <!-- ================================================================== -->
+
+        <command name="DataPrefill" builder="ClassBuilder" key="com.ail.insurance.quotation.DataPrefillService$DataPrefillCommand">
+            <parameter name="Service">com.ail.insurance.quotation.DataPrefillService</parameter>
+        </command>
+
+        <command name="PolicyDataImport" builder="ClassBuilder" key="com.ail.insurance.quotation.PolicyDataImportService$PolicyDataImportCommand">
+            <parameter name="Service">com.ail.insurance.quotation.PolicyDataImportService</parameter>
+        </command>
+
+        <!-- ================================================================== -->
+        <!-- Referral auto-resolution commands                                  -->
+        <!-- ================================================================== -->
+
+        <command name="AutoResolveReferral" builder="ClassBuilder" key="com.ail.insurance.quotation.AutoResolveReferralService$AutoResolveReferralCommand">
+            <parameter name="Service">com.ail.insurance.quotation.AutoResolveReferralService</parameter>
+        </command>
+
+        <command name="ResolveAndRecalculate" builder="ClassBuilder" key="com.ail.insurance.quotation.ResolveAndRecalculateService$ResolveAndRecalculateCommand">
+            <parameter name="Service">com.ail.insurance.quotation.ResolveAndRecalculateService</parameter>
+        </command>
+
+        <!-- ================================================================== -->
         <!-- Default workflow commands                                          -->
         <!-- ================================================================== -->
 
