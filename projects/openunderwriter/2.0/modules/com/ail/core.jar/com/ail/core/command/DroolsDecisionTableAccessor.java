@@ -24,6 +24,7 @@ import java.net.URL;
 import java.security.Principal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.drools.RuleBase;
 import org.drools.RuleBaseFactory;
@@ -60,6 +61,9 @@ public class DroolsDecisionTableAccessor extends Accessor implements Configurati
     private transient RuleBase ruleBase=null;
     private transient Throwable compilationError=null;
     private boolean ruleBaseLoaded=false;
+
+    /** Cache of filtered getter methods per argument class type, avoiding repeated reflection lookups. */
+    private static final ConcurrentHashMap<Class<?>, Method[]> methodCache = new ConcurrentHashMap<Class<?>, Method[]>();
 
     public void setArgs(Argument args) {
         this.args=args;
@@ -215,10 +219,9 @@ public class DroolsDecisionTableAccessor extends Accessor implements Configurati
             workingMemory.insert(getArgs());
 
             // create a global (variable) for each arg/ret in the service's arguments
-            for(Method m: getArgs().getClass().getMethods()) {
-                if (m.getName().startsWith("get") && (m.getName().endsWith("Arg") || m.getName().endsWith("Ret"))) {
-                    workingMemory.setGlobal("$"+m.getName().substring(3), m.invoke(args));
-                }
+            Method[] cachedMethods = getFilteredMethods(getArgs().getClass());
+            for(Method m: cachedMethods) {
+                workingMemory.setGlobal("$"+m.getName().substring(3), m.invoke(args));
             }
             
             workingMemory.fireAllRules();
@@ -305,5 +308,29 @@ public class DroolsDecisionTableAccessor extends Accessor implements Configurati
 
     public void setRuleBaseLoaded(boolean ruleBaseLoaded) {
         this.ruleBaseLoaded = ruleBaseLoaded;
+    }
+
+    /**
+     * Get the filtered array of getter methods for the given argument class.
+     * Results are cached per class type to avoid repeated reflection lookups.
+     * Only methods starting with "get" and ending with "Arg" or "Ret" are included.
+     * @param argClass The argument class to get filtered methods for.
+     * @return Array of filtered Method objects.
+     */
+    private static Method[] getFilteredMethods(Class<?> argClass) {
+        Method[] cached = methodCache.get(argClass);
+        if (cached != null) {
+            return cached;
+        }
+
+        ArrayList<Method> filtered = new ArrayList<Method>();
+        for (Method m : argClass.getMethods()) {
+            if (m.getName().startsWith("get") && (m.getName().endsWith("Arg") || m.getName().endsWith("Ret"))) {
+                filtered.add(m);
+            }
+        }
+        Method[] result = filtered.toArray(new Method[filtered.size()]);
+        methodCache.putIfAbsent(argClass, result);
+        return methodCache.get(argClass);
     }
 }

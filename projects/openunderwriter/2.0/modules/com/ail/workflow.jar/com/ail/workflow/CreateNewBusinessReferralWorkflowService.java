@@ -17,12 +17,19 @@
 
 package com.ail.workflow;
 
+import java.util.Enumeration;
+import java.util.Hashtable;
+
 import com.ail.annotation.ServiceImplementation;
 import com.ail.core.BaseException;
 import com.ail.core.PostconditionException;
 import com.ail.core.PreconditionException;
 import com.ail.core.Service;
+import com.ail.insurance.policy.AssessmentSheet;
+import com.ail.insurance.policy.Marker;
+import com.ail.insurance.policy.MarkerType;
 import com.ail.insurance.policy.Policy;
+import com.ail.insurance.policy.Section;
 import com.ail.pageflow.ExecutePageActionService;
 import com.ail.pageflow.PageFlowContext;
 import com.liferay.portal.kernel.workflow.WorkflowHandlerRegistryUtil;
@@ -57,6 +64,9 @@ public class CreateNewBusinessReferralWorkflowService extends Service<ExecutePag
         try {
             NewBusinessReferral newBusinessReferral = new NewBusinessReferral(policy);
 
+            // Populate referral metadata from the policy's assessment sheet markers
+            populateReferralMetadata(newBusinessReferral, policy);
+
             User user = PortalUtil.getUser(PageFlowContext.getRequest());
             Company company = PortalUtil.getCompany(PageFlowContext.getRequest());
             ServiceContext serviceContext = ServiceContextFactory.getInstance(PageFlowContext.getRequest());
@@ -86,5 +96,63 @@ public class CreateNewBusinessReferralWorkflowService extends Service<ExecutePag
     // Wrapper to static PageFlowContext method call to help testability.
     protected String getProductNameFromPageFlowContext() {
         return PageFlowContext.getProductName();
+    }
+
+    /**
+     * Populate referral metadata on the NewBusinessReferral from the policy's assessment sheet markers.
+     * Extracts referral reasons, calculated premium, and determines the authority level required.
+     */
+    protected void populateReferralMetadata(NewBusinessReferral referral, Policy policy) {
+        // Collect referral reasons from the policy-level assessment sheet
+        collectReferralReasons(referral, policy.getAssessmentSheet());
+
+        // Collect referral reasons from section-level assessment sheets
+        for (Section section : policy.getSection()) {
+            if (section.getAssessmentSheet() != null) {
+                collectReferralReasons(referral, section.getAssessmentSheet());
+            }
+        }
+
+        // Set calculated premium if available
+        try {
+            referral.setCalculatedPremium(policy.getTotalPremium());
+        } catch (IllegalStateException e) {
+            // Premium not yet calculated - this is acceptable for referrals
+        }
+
+        // Determine authority level based on number of referral reasons
+        int reasonCount = referral.getReferralReasons().size();
+        if (reasonCount > 3) {
+            referral.setAuthorityLevelRequired(NewBusinessReferral.AuthorityLevel.MANAGER);
+        } else if (reasonCount > 1) {
+            referral.setAuthorityLevelRequired(NewBusinessReferral.AuthorityLevel.SENIOR);
+        } else {
+            referral.setAuthorityLevelRequired(NewBusinessReferral.AuthorityLevel.STANDARD);
+        }
+
+        // Set a suggested resolution if there's only one simple referral
+        if (reasonCount == 1) {
+            referral.setSuggestedResolution("Review single referral reason and apply override if within authority.");
+        } else if (reasonCount > 1) {
+            referral.setSuggestedResolution("Multiple referral reasons require individual review.");
+        }
+    }
+
+    /**
+     * Extract referral marker reasons from an assessment sheet and add them to the referral.
+     */
+    private void collectReferralReasons(NewBusinessReferral referral, AssessmentSheet sheet) {
+        if (sheet == null) {
+            return;
+        }
+
+        Hashtable<String, Marker> markers = sheet.getLinesOfType(Marker.class);
+        for (Enumeration<Marker> en = markers.elements(); en.hasMoreElements();) {
+            Marker marker = en.nextElement();
+            if (MarkerType.REFER.equals(marker.getType())
+                    && sheet.findResolutionByMarkerId(marker.getId()) == null) {
+                referral.addReferralReason(marker.getReason());
+            }
+        }
     }
 }

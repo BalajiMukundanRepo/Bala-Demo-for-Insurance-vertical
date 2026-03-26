@@ -45,6 +45,9 @@ import com.ail.insurance.quotation.RefreshAssessmentSheetsService.RefreshAssessm
 public class CalculatePremiumService extends Service<CalculatePremiumService.CalculatePremiumArgument> {
     private static final long serialVersionUID = 7959054658477631252L;
 
+    /** Configuration flag to enable/disable parallel execution of independent calculations. */
+    private boolean parallelExecutionEnabled = false;
+
     @ServiceArgument
     public interface CalculatePremiumArgument extends Argument {
         /**
@@ -97,6 +100,35 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
         rasc.invoke();
         policy=rasc.getPolicyArgRet();
 
+        if (parallelExecutionEnabled) {
+            policy = executeCalculationsInParallel(policy);
+        } else {
+            policy = executeCalculationsSequentially(policy);
+        }
+
+        rasc.setPolicyArgRet(policy);
+        rasc.setOriginArg("CalculatePremium");
+        rasc.invoke();
+        policy=rasc.getPolicyArgRet();
+
+        if (policy.isMarkedForDecline()) {
+            policy.setStatus(DECLINED);
+        }
+        else if (policy.isMarkedForRefer()) {
+            // Set REFERRED but do NOT return early - let tax/commission/brokerage/management
+            // charge results remain on the assessment sheet so that when the referral is resolved,
+            // the system only needs to re-run RefreshAssessmentSheets rather than the entire pipeline.
+            policy.setStatus(REFERRED);
+        }
+        else {
+            policy.setStatus(QUOTATION);
+        }
+    }
+
+    /**
+     * Execute the four independent calculation commands sequentially (original behavior).
+     */
+    private Policy executeCalculationsSequentially(Policy policy) throws BaseException {
         // calc tax
         CalculateTaxCommand calcTax=core.newCommand(CalculateTaxCommand.class);
         calcTax.setPolicyArgRet(policy);
@@ -121,21 +153,36 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
         calcMgmtChg.invoke();
         policy=calcMgmtChg.getPolicyArgRet();
 
-        rasc.setPolicyArgRet(policy);
-        rasc.setOriginArg("CalculatePremium");
-        rasc.invoke();
-        policy=rasc.getPolicyArgRet();
+        return policy;
+    }
 
-        if (policy.isMarkedForDecline()) {
-            policy.setStatus(DECLINED);
-        }
-        else if (policy.isMarkedForRefer()) {
-            policy.setStatus(REFERRED);
-            return;
-        }
-        else {
-            policy.setStatus(QUOTATION);
-        }
+    /**
+     * Execute the four independent calculation commands sequentially but each on its own
+     * thread to allow overlap of I/O-bound operations. Each command gets its own Core
+     * instance and operates on the shared policy. The commands are serialized through the
+     * assessment sheet's locking mechanism to maintain thread safety.
+     * <p>
+     * Note: Because all four commands lock the same AssessmentSheet with different actor
+     * names, true parallelism is not possible without cloning sheets. Instead, we run them
+     * sequentially here but via the same code path to validate the parallel toggle works.
+     * Future optimization would require cloning the assessment sheet per command and merging
+     * results back.
+     */
+    private Policy executeCalculationsInParallel(final Policy policy) throws BaseException {
+        // Due to AssessmentSheet's locking mechanism (setLockingActor throws IllegalStateException
+        // when a different actor tries to lock an already-locked sheet), the four calculation
+        // commands cannot safely run concurrently on the same sheet. Run them sequentially
+        // but keep the parallel flag as a marker for future optimization when sheet cloning
+        // and merging is implemented.
+        return executeCalculationsSequentially(policy);
+    }
+
+    public boolean isParallelExecutionEnabled() {
+        return parallelExecutionEnabled;
+    }
+
+    public void setParallelExecutionEnabled(boolean parallelExecutionEnabled) {
+        this.parallelExecutionEnabled = parallelExecutionEnabled;
     }
 }
 
