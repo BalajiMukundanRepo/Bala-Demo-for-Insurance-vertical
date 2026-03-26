@@ -20,7 +20,9 @@ package com.ail.insurance.quotation;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Set;
 
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
@@ -83,7 +85,7 @@ public class RefreshAssessmentSheetsService extends Service<RefreshAssessmentShe
      * @param calculationCountOffset Index to start numbering processed lines from. 
      * @return true If any line is processed, false otherwise
      */
-    private int processSheet(AssessmentSheet sheet, AssessmentSheetList sheets, Collection<AssessmentLine> processed, int calculationCountOffset) {
+    private int processSheet(AssessmentSheet sheet, AssessmentSheetList sheets, Set<AssessmentLine> processed, int calculationCountOffset) {
         int processedLineCount=calculationCountOffset+1;
         CalculationLine cl=null;
         ArrayList<CalculationLine> sortedLines=null;
@@ -101,7 +103,7 @@ public class RefreshAssessmentSheetsService extends Service<RefreshAssessmentShe
         for(Iterator<CalculationLine> it=sortedLines.iterator() ; it.hasNext() ; ) {
             cl=it.next();
 
-            // if we've processed this line already, skip to the next.
+            // if we've processed this line already, skip to the next (O(1) HashSet lookup).
             if (processed.contains(cl)) {
                 continue;
             }
@@ -116,21 +118,26 @@ public class RefreshAssessmentSheetsService extends Service<RefreshAssessmentShe
         return processedLineCount;
     }
 
-    private int iterateOverSheets(AssessmentSheetList sheets, Collection<AssessmentLine> processed, int calculationOrder) {
+    private int iterateOverSheets(AssessmentSheetList sheets, Set<AssessmentLine> processed, int calculationOrder) {
         boolean again=false;
+        // Track which sheets had changes so only those are re-processed in subsequent iterations
+        Set<AssessmentSheet> dirtySheets = new HashSet<AssessmentSheet>(sheets.getSheets());
 
         do {
             again=false;
+            Set<AssessmentSheet> nextDirtySheets = new HashSet<AssessmentSheet>();
 
-            for(Iterator<AssessmentSheet> it=sheets.getSheets().iterator() ; it.hasNext() ; ) {
-                
-                int count=processSheet(it.next(), sheets, processed, calculationOrder);
+            for(Iterator<AssessmentSheet> it=dirtySheets.iterator() ; it.hasNext() ; ) {
+                AssessmentSheet sheet = it.next();
+                int count=processSheet(sheet, sheets, processed, calculationOrder);
                 
                 if (count!=0) {
                     calculationOrder+=count;
                     again=true;
+                    nextDirtySheets.add(sheet);
                 }
             }
+            dirtySheets = nextDirtySheets;
         } while(again==true);
 
         return calculationOrder;
@@ -139,7 +146,7 @@ public class RefreshAssessmentSheetsService extends Service<RefreshAssessmentShe
     private void processAssessmentSheets(Policy policy) {
         int calculationOrder=0;
         AssessmentSheetList sheets=new AssessmentSheetList(policy);
-        Collection<AssessmentLine> processed=new ArrayList<AssessmentLine>();
+        Set<AssessmentLine> processed=new HashSet<AssessmentLine>();
 
         // execute all the control lines appropriate to the before phase
         sheets.executeControlLinesForAssessmentStage(AssessmentStage.BEFORE_RATING);

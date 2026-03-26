@@ -17,6 +17,13 @@
 
 package com.ail.insurance.quotation;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
 import com.ail.annotation.ServiceImplementation;
@@ -38,6 +45,9 @@ import com.ail.insurance.quotation.AssessSectionRiskService.AssessSectionRiskCom
 @ServiceImplementation
 public class AssessRiskService extends Service<AssessRiskService.AssessRiskArgument> {
     private static final long serialVersionUID = 7260448770297048139L;
+
+    /** Configuration flag to enable/disable parallel section-level risk assessment. */
+    private boolean parallelSectionAssessmentEnabled = false;
 
     @ServiceArgument
     public interface AssessRiskArgument extends Argument {
@@ -133,42 +143,10 @@ public class AssessRiskService extends Service<AssessRiskService.AssessRiskArgum
         String namespace=Functions.productNameToConfigurationNamespace(args.getPolicyArgRet().getProductTypeId());
         setCore(new CoreProxy(namespace, args.getCallersCore()).getCore());
 
-        // Loop through each section
-        for(Section section: policy.getSection()) {
-
-            // Make sure the section has a SectionType - we'll need it to build rule names
-            if (section.getSectionTypeId()==null || section.getSectionTypeId().length()==0) {
-                throw new PreconditionException("policy.section[id="+section.getId()+"].sectionTypeId==null || policy.section[id="+section.getId()+"].sectionTypeId==\"\"");
-            }
-
-            // Get the assessment sheet.
-            if (section.getAssessmentSheet()==null) {
-                // The section doesn't have one yet, so create it.
-                as=core.newType(AssessmentSheet.class);
-            }
-            else {
-                // The section has one, so us it - after clearing out the old entries.
-                as=section.getAssessmentSheet();
-                as.removeLinesByOrigin("AssessRisk");
-            }
-
-            // Make up the rule name <ProductType>.<SectionType>
-            String ruleName="AssessSectionRisk/"+section.getSectionTypeId();
-
-            // Load the rule, and populate it with arguments
-            AssessSectionRiskCommand rule=getCore().newCommand(ruleName, AssessSectionRiskCommand.class);
-            rule.setCoreArg(getCore());
-            rule.setPolicyArg(policy);
-            rule.setSectionArg(section);
-            rule.setAssessmentSheetArgRet(as);
-
-            // Lock the sheet to us, run the rules, and unlock the sheet.
-            rule.getAssessmentSheetArgRet().setLockingActor("AssessRisk");
-            rule.invoke();
-            rule.getAssessmentSheetArgRet().clearLockingActor();
-
-            // Pull the AssessmentSheet out or rules and add it to the section.
-            section.setAssessmentSheet(rule.getAssessmentSheetArgRet());
+        if (parallelSectionAssessmentEnabled && policy.getSection().size() > 1) {
+            assessSectionsInParallel(policy);
+        } else {
+            assessSectionsSequentially(policy);
         }
 
         // Get the AssessmentSheet for the policy
@@ -195,6 +173,93 @@ public class AssessRiskService extends Service<AssessRiskService.AssessRiskArgum
 
         // Pull the premium calculation table out of the results and add it to the policy
         policy.setAssessmentSheet(rule.getAssessmentSheetArgRet());
+    }
+
+    /**
+     * Assess sections sequentially (original behavior).
+     */
+    private void assessSectionsSequentially(Policy policy) throws BaseException {
+        for (Section section : policy.getSection()) {
+            assessSection(policy, section);
+        }
+    }
+
+    /**
+     * Assess sections in parallel. Each section has its own independent AssessmentSheet,
+     * so there are no cross-section dependencies.
+     */
+    private void assessSectionsInParallel(final Policy policy) throws BaseException {
+        ExecutorService executor = Executors.newFixedThreadPool(
+                Math.min(policy.getSection().size(), Runtime.getRuntime().availableProcessors()));
+
+        try {
+            List<Future<Void>> futures = new ArrayList<Future<Void>>();
+
+            for (final Section section : policy.getSection()) {
+                futures.add(executor.submit(new Callable<Void>() {
+                    public Void call() throws Exception {
+                        assessSection(policy, section);
+                        return null;
+                    }
+                }));
+            }
+
+            for (Future<Void> future : futures) {
+                try {
+                    future.get();
+                } catch (Exception e) {
+                    throw new BaseException("Parallel section assessment failed: " + e.getMessage(), e);
+                }
+            }
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    /**
+     * Assess risk for a single section.
+     */
+    private void assessSection(Policy policy, Section section) throws BaseException {
+        // Make sure the section has a SectionType - we'll need it to build rule names
+        if (section.getSectionTypeId() == null || section.getSectionTypeId().length() == 0) {
+            throw new PreconditionException("policy.section[id=" + section.getId() + "].sectionTypeId==null || policy.section[id=" + section.getId() + "].sectionTypeId==\"\"");
+        }
+
+        AssessmentSheet as;
+
+        // Get the assessment sheet.
+        if (section.getAssessmentSheet() == null) {
+            as = core.newType(AssessmentSheet.class);
+        } else {
+            as = section.getAssessmentSheet();
+            as.removeLinesByOrigin("AssessRisk");
+        }
+
+        // Make up the rule name <ProductType>.<SectionType>
+        String ruleName = "AssessSectionRisk/" + section.getSectionTypeId();
+
+        // Load the rule, and populate it with arguments
+        AssessSectionRiskCommand rule = getCore().newCommand(ruleName, AssessSectionRiskCommand.class);
+        rule.setCoreArg(getCore());
+        rule.setPolicyArg(policy);
+        rule.setSectionArg(section);
+        rule.setAssessmentSheetArgRet(as);
+
+        // Lock the sheet to us, run the rules, and unlock the sheet.
+        rule.getAssessmentSheetArgRet().setLockingActor("AssessRisk");
+        rule.invoke();
+        rule.getAssessmentSheetArgRet().clearLockingActor();
+
+        // Pull the AssessmentSheet out of rules and add it to the section.
+        section.setAssessmentSheet(rule.getAssessmentSheetArgRet());
+    }
+
+    public boolean isParallelSectionAssessmentEnabled() {
+        return parallelSectionAssessmentEnabled;
+    }
+
+    public void setParallelSectionAssessmentEnabled(boolean parallelSectionAssessmentEnabled) {
+        this.parallelSectionAssessmentEnabled = parallelSectionAssessmentEnabled;
     }
 }
 

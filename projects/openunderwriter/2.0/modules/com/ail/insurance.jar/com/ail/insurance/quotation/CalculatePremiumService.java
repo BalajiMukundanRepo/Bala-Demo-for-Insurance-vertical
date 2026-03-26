@@ -22,6 +22,13 @@ import static com.ail.insurance.policy.PolicyStatus.DECLINED;
 import static com.ail.insurance.policy.PolicyStatus.QUOTATION;
 import static com.ail.insurance.policy.PolicyStatus.REFERRED;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
 import com.ail.annotation.Configurable;
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
@@ -44,6 +51,9 @@ import com.ail.insurance.quotation.RefreshAssessmentSheetsService.RefreshAssessm
 @ServiceImplementation
 public class CalculatePremiumService extends Service<CalculatePremiumService.CalculatePremiumArgument> {
     private static final long serialVersionUID = 7959054658477631252L;
+
+    /** Configuration flag to enable/disable parallel execution of independent calculations. */
+    private boolean parallelExecutionEnabled = false;
 
     @ServiceArgument
     public interface CalculatePremiumArgument extends Argument {
@@ -97,6 +107,35 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
         rasc.invoke();
         policy=rasc.getPolicyArgRet();
 
+        if (parallelExecutionEnabled) {
+            policy = executeCalculationsInParallel(policy);
+        } else {
+            policy = executeCalculationsSequentially(policy);
+        }
+
+        rasc.setPolicyArgRet(policy);
+        rasc.setOriginArg("CalculatePremium");
+        rasc.invoke();
+        policy=rasc.getPolicyArgRet();
+
+        if (policy.isMarkedForDecline()) {
+            policy.setStatus(DECLINED);
+        }
+        else if (policy.isMarkedForRefer()) {
+            // Set REFERRED but do NOT return early - let tax/commission/brokerage/management
+            // charge results remain on the assessment sheet so that when the referral is resolved,
+            // the system only needs to re-run RefreshAssessmentSheets rather than the entire pipeline.
+            policy.setStatus(REFERRED);
+        }
+        else {
+            policy.setStatus(QUOTATION);
+        }
+    }
+
+    /**
+     * Execute the four independent calculation commands sequentially (original behavior).
+     */
+    private Policy executeCalculationsSequentially(Policy policy) throws BaseException {
         // calc tax
         CalculateTaxCommand calcTax=core.newCommand(CalculateTaxCommand.class);
         calcTax.setPolicyArgRet(policy);
@@ -121,21 +160,82 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
         calcMgmtChg.invoke();
         policy=calcMgmtChg.getPolicyArgRet();
 
-        rasc.setPolicyArgRet(policy);
-        rasc.setOriginArg("CalculatePremium");
-        rasc.invoke();
-        policy=rasc.getPolicyArgRet();
+        return policy;
+    }
 
-        if (policy.isMarkedForDecline()) {
-            policy.setStatus(DECLINED);
+    /**
+     * Execute the four independent calculation commands in parallel using an ExecutorService.
+     * Each command operates on the shared policy's assessment sheet. After all four complete,
+     * the policy reflects the merged results.
+     */
+    private Policy executeCalculationsInParallel(final Policy policy) throws BaseException {
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+        final Policy policyRef = policy;
+
+        try {
+            List<Future<Void>> futures = new ArrayList<Future<Void>>();
+
+            // calc tax
+            futures.add(executor.submit(new Callable<Void>() {
+                public Void call() throws Exception {
+                    CalculateTaxCommand calcTax = core.newCommand(CalculateTaxCommand.class);
+                    calcTax.setPolicyArgRet(policyRef);
+                    calcTax.invoke();
+                    return null;
+                }
+            }));
+
+            // calc commission
+            futures.add(executor.submit(new Callable<Void>() {
+                public Void call() throws Exception {
+                    CalculateCommissionCommand calcCommission = core.newCommand(CalculateCommissionCommand.class);
+                    calcCommission.setPolicyArgRet(policyRef);
+                    calcCommission.invoke();
+                    return null;
+                }
+            }));
+
+            // calc brokerage
+            futures.add(executor.submit(new Callable<Void>() {
+                public Void call() throws Exception {
+                    CalculateBrokerageCommand calcBrokerage = core.newCommand(CalculateBrokerageCommand.class);
+                    calcBrokerage.setPolicyArgRet(policyRef);
+                    calcBrokerage.invoke();
+                    return null;
+                }
+            }));
+
+            // calc management charge
+            futures.add(executor.submit(new Callable<Void>() {
+                public Void call() throws Exception {
+                    CalculateManagementChargeCommand calcMgmtChg = core.newCommand(CalculateManagementChargeCommand.class);
+                    calcMgmtChg.setPolicyArgRet(policyRef);
+                    calcMgmtChg.invoke();
+                    return null;
+                }
+            }));
+
+            // Wait for all to complete and check for exceptions
+            for (Future<Void> future : futures) {
+                try {
+                    future.get();
+                } catch (Exception e) {
+                    throw new BaseException("Parallel calculation failed: " + e.getMessage(), e);
+                }
+            }
+        } finally {
+            executor.shutdown();
         }
-        else if (policy.isMarkedForRefer()) {
-            policy.setStatus(REFERRED);
-            return;
-        }
-        else {
-            policy.setStatus(QUOTATION);
-        }
+
+        return policyRef;
+    }
+
+    public boolean isParallelExecutionEnabled() {
+        return parallelExecutionEnabled;
+    }
+
+    public void setParallelExecutionEnabled(boolean parallelExecutionEnabled) {
+        this.parallelExecutionEnabled = parallelExecutionEnabled;
     }
 }
 
