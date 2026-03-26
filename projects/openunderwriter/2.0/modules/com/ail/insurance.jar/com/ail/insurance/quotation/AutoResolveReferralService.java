@@ -21,6 +21,8 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.Hashtable;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.ail.annotation.ServiceArgument;
 import com.ail.annotation.ServiceCommand;
@@ -55,6 +57,9 @@ public class AutoResolveReferralService extends Service<AutoResolveReferralServi
 
     /** Default tolerance percentage for auto-resolving out-of-bounds referrals. */
     private static final double DEFAULT_TOLERANCE_PERCENT = 10.0;
+
+    /** Pattern to extract value and limit from referral reason strings like "Value 1100 exceeded limit of 1000". */
+    private static final Pattern EXCEEDED_LIMIT_PATTERN = Pattern.compile("(\\d+\\.?\\d*)\\s+exceeded\\s+limit\\s+of\\s+(\\d+\\.?\\d*)");
 
     @ServiceArgument
     public interface AutoResolveReferralArgument extends Argument {
@@ -173,15 +178,54 @@ public class AutoResolveReferralService extends Service<AutoResolveReferralServi
                 continue;
             }
 
-            // Check if this is a value-out-of-bounds referral within tolerance
+            // Check if this is a value-out-of-bounds referral within tolerance.
+            // Parse the actual value and limit from the reason string and only auto-resolve
+            // if the excess percentage is within the configured tolerance.
             if (reason != null && reason.contains("exceeded limit of")) {
-                addAutoResolution(sheet, marker,
-                        "Auto-resolved: within " + tolerancePercent + "% tolerance of limit");
-                resolved++;
+                if (isWithinTolerance(reason, tolerancePercent)) {
+                    addAutoResolution(sheet, marker,
+                            "Auto-resolved: within " + tolerancePercent + "% tolerance of limit");
+                    resolved++;
+                }
             }
         }
 
         return resolved;
+    }
+
+    /**
+     * Parse the actual value and limit from a referral reason string and determine if
+     * the excess is within the configured tolerance percentage.
+     * <p>
+     * For example, given reason "Value 1100 exceeded limit of 1000" and tolerance 10%:
+     * excess = (1100 - 1000) / 1000 * 100 = 10%, which is within tolerance.
+     * <p>
+     * If the reason string cannot be parsed, returns false (fail-safe: do NOT auto-resolve).
+     *
+     * @param reason The referral reason string to parse.
+     * @param tolerancePercent The maximum allowed excess as a percentage.
+     * @return true if the excess is within tolerance, false otherwise.
+     */
+    private boolean isWithinTolerance(String reason, double tolerancePercent) {
+        Matcher matcher = EXCEEDED_LIMIT_PATTERN.matcher(reason);
+        if (!matcher.find()) {
+            // Cannot parse the reason string - fail safe by not auto-resolving
+            return false;
+        }
+
+        try {
+            double actualValue = Double.parseDouble(matcher.group(1));
+            double limitValue = Double.parseDouble(matcher.group(2));
+
+            if (limitValue <= 0) {
+                return false;
+            }
+
+            double excessPercent = ((actualValue - limitValue) / limitValue) * 100.0;
+            return excessPercent >= 0 && excessPercent <= tolerancePercent;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private boolean matchesApprovedExceptions(String reason, List<String> approvedExceptions) {

@@ -186,34 +186,22 @@ public class AssessRiskService extends Service<AssessRiskService.AssessRiskArgum
 
     /**
      * Assess sections in parallel. Each section has its own independent AssessmentSheet,
-     * so there are no cross-section dependencies.
+     * so there are no cross-section dependencies. However, each worker thread needs its
+     * own Core instance since Core is not thread-safe (it holds internal state for
+     * configuration lookups, caching, etc.).
+     * <p>
+     * Note: The current implementation delegates to sequential execution because
+     * {@code assessSection()} uses the shared {@code core} field (inherited from Service)
+     * which is not designed for concurrent access. True parallelism would require creating
+     * a separate Core instance per thread via {@code new CoreProxy(namespace, callersCore).getCore()}.
+     * This is left as a future optimization.
      */
     private void assessSectionsInParallel(final Policy policy) throws BaseException {
-        ExecutorService executor = Executors.newFixedThreadPool(
-                Math.min(policy.getSection().size(), Runtime.getRuntime().availableProcessors()));
-
-        try {
-            List<Future<Void>> futures = new ArrayList<Future<Void>>();
-
-            for (final Section section : policy.getSection()) {
-                futures.add(executor.submit(new Callable<Void>() {
-                    public Void call() throws Exception {
-                        assessSection(policy, section);
-                        return null;
-                    }
-                }));
-            }
-
-            for (Future<Void> future : futures) {
-                try {
-                    future.get();
-                } catch (Exception e) {
-                    throw new BaseException("Parallel section assessment failed: " + e.getMessage(), e);
-                }
-            }
-        } finally {
-            executor.shutdown();
-        }
+        // Core is not thread-safe (holds CoreUser reference, delegates to ConfigurationHandler,
+        // FactoryHandler, etc. which maintain internal state). Concurrent calls to
+        // core.newType() or core.newCommand() from multiple threads can corrupt that state.
+        // Fall back to sequential execution until per-thread Core instances are implemented.
+        assessSectionsSequentially(policy);
     }
 
     /**

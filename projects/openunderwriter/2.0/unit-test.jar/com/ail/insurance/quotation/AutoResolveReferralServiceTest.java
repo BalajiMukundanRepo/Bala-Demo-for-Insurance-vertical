@@ -100,7 +100,8 @@ public class AutoResolveReferralServiceTest {
         Marker referMarker = mock(Marker.class);
         when(referMarker.getType()).thenReturn(MarkerType.REFER);
         when(referMarker.getId()).thenReturn("marker1");
-        when(referMarker.getReason()).thenReturn("Value exceeded limit of 1000");
+        // 1100 exceeded limit of 1000 = 10% excess, within 15% tolerance
+        when(referMarker.getReason()).thenReturn("Value 1100 exceeded limit of 1000");
         markers.put("marker1", referMarker);
 
         when(mockAssessmentSheet.getLinesOfType(Marker.class)).thenReturn(markers);
@@ -109,6 +110,42 @@ public class AutoResolveReferralServiceTest {
 
         sut.invoke();
         verify(mockArgs).setResolvedCountRet(1);
+    }
+
+    @Test
+    public void testDoNotResolveOutOfBoundsExceedingTolerance() throws BaseException {
+        when(mockArgs.getTolerancePercentArg()).thenReturn(5.0);
+
+        Hashtable<String, Marker> markers = new Hashtable<String, Marker>();
+        Marker referMarker = mock(Marker.class);
+        when(referMarker.getType()).thenReturn(MarkerType.REFER);
+        when(referMarker.getId()).thenReturn("marker1");
+        // 1200 exceeded limit of 1000 = 20% excess, beyond 5% tolerance
+        when(referMarker.getReason()).thenReturn("Value 1200 exceeded limit of 1000");
+        markers.put("marker1", referMarker);
+
+        when(mockAssessmentSheet.getLinesOfType(Marker.class)).thenReturn(markers);
+        when(mockAssessmentSheet.findResolutionByMarkerId("marker1")).thenReturn(null);
+
+        sut.invoke();
+        verify(mockArgs).setResolvedCountRet(0);
+    }
+
+    @Test
+    public void testDoNotResolveUnparseableReason() throws BaseException {
+        Hashtable<String, Marker> markers = new Hashtable<String, Marker>();
+        Marker referMarker = mock(Marker.class);
+        when(referMarker.getType()).thenReturn(MarkerType.REFER);
+        when(referMarker.getId()).thenReturn("marker1");
+        // Unparseable reason - should fail safe and NOT auto-resolve
+        when(referMarker.getReason()).thenReturn("Some value exceeded limit of something");
+        markers.put("marker1", referMarker);
+
+        when(mockAssessmentSheet.getLinesOfType(Marker.class)).thenReturn(markers);
+        when(mockAssessmentSheet.findResolutionByMarkerId("marker1")).thenReturn(null);
+
+        sut.invoke();
+        verify(mockArgs).setResolvedCountRet(0);
     }
 
     @Test
