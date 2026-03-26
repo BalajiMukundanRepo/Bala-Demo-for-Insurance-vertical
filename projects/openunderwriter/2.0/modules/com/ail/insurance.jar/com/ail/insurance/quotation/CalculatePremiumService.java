@@ -123,8 +123,11 @@ public class CalculatePremiumService extends Service<CalculatePremiumService.Cal
                 autoResolve.setTolerancePercentArg(10.0);
                 autoResolve.invoke();
                 policy = autoResolve.getPolicyArgRet();
-            } catch (com.ail.core.ConfigurationError e) {
-                // AutoResolveReferral command not configured - continue without auto-resolution
+            } catch (Exception e) {
+                // Auto-resolve failed at runtime - continue with normal referral flow
+                core.logInfo("AutoResolveReferral failed, continuing with referral: " + e.getMessage());
+            } catch (Error e) {
+                // AutoResolveReferral command not configured (ConfigurationError extends Error)
                 core.logInfo("AutoResolveReferral not configured, skipping: " + e.getMessage());
             }
 

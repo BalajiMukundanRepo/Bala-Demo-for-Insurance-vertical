@@ -44,6 +44,7 @@ public class CalculatePremiumServiceTest {
     private CalculateBrokerageCommand mockCalcBrokerageCommand;
     private CalculateManagementChargeCommand mockCalcMgmtChargeCommand;
     private AssessmentSheet mockAssessmentSheet;
+    private AutoResolveReferralCommand mockAutoResolveCommand;
 
     @Before
     public void setup() throws BaseException {
@@ -57,6 +58,7 @@ public class CalculatePremiumServiceTest {
         mockCalcBrokerageCommand = mock(CalculateBrokerageCommand.class);
         mockCalcMgmtChargeCommand = mock(CalculateManagementChargeCommand.class);
         mockAssessmentSheet = mock(AssessmentSheet.class);
+        mockAutoResolveCommand = mock(AutoResolveReferralCommand.class);
 
         sut = spy(new CalculatePremiumService());
         sut.setCore(mockCore);
@@ -88,6 +90,9 @@ public class CalculatePremiumServiceTest {
 
         when(mockCore.newCommand(CalculateManagementChargeCommand.class)).thenReturn(mockCalcMgmtChargeCommand);
         when(mockCalcMgmtChargeCommand.getPolicyArgRet()).thenReturn(mockPolicy);
+
+        when(mockCore.newCommand(AutoResolveReferralCommand.class)).thenReturn(mockAutoResolveCommand);
+        when(mockAutoResolveCommand.getPolicyArgRet()).thenReturn(mockPolicy);
     }
 
     @Test(expected = PreconditionException.class)
@@ -194,16 +199,12 @@ public class CalculatePremiumServiceTest {
         // Policy is marked for refer initially, then not after auto-resolve
         when(mockPolicy.isMarkedForRefer()).thenReturn(true).thenReturn(false);
 
-        AutoResolveReferralCommand mockAutoResolve = mock(AutoResolveReferralCommand.class);
-        when(mockCore.newCommand(AutoResolveReferralCommand.class)).thenReturn(mockAutoResolve);
-        when(mockAutoResolve.getPolicyArgRet()).thenReturn(mockPolicy);
-
         sut.invoke();
 
         // Auto-resolve was invoked
-        verify(mockAutoResolve).setPolicyArgRet(mockPolicy);
-        verify(mockAutoResolve).setTolerancePercentArg(10.0);
-        verify(mockAutoResolve).invoke();
+        verify(mockAutoResolveCommand).setPolicyArgRet(mockPolicy);
+        verify(mockAutoResolveCommand).setTolerancePercentArg(10.0);
+        verify(mockAutoResolveCommand).invoke();
 
         // After auto-resolve cleared all referrals, status should be QUOTATION
         verify(mockPolicy).setStatus(eq(QUOTATION));
@@ -214,14 +215,10 @@ public class CalculatePremiumServiceTest {
         // Policy remains marked for refer even after auto-resolve
         when(mockPolicy.isMarkedForRefer()).thenReturn(true);
 
-        AutoResolveReferralCommand mockAutoResolve = mock(AutoResolveReferralCommand.class);
-        when(mockCore.newCommand(AutoResolveReferralCommand.class)).thenReturn(mockAutoResolve);
-        when(mockAutoResolve.getPolicyArgRet()).thenReturn(mockPolicy);
-
         sut.invoke();
 
         // Auto-resolve was invoked but some referrals remain
-        verify(mockAutoResolve).invoke();
+        verify(mockAutoResolveCommand).invoke();
 
         // Status should still be REFERRED since not all referrals were resolved
         verify(mockPolicy).setStatus(eq(REFERRED));
