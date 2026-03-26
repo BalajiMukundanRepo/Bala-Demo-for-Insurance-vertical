@@ -27,7 +27,7 @@ public class PremiumCalculationService {
             quote=(Quotation)cpc.getPolicyArgRet();
         }
         catch(Throwable e) {
-            core.logError("Premium calculation failed for quote: " + quote.getProductTypeId(), e);
+            core.logError("Premium calculation failed for quote: " + (quote != null ? quote.getProductTypeId() : "unknown"), e);
         }
         finally {
             try {
